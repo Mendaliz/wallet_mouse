@@ -10,18 +10,19 @@ import json
 import csv
 import datetime
 
-
 bot = telebot.TeleBot(TOKEN)
 
 
 def add_to_json(cost, product, currency, category, buyer):
-    current_date=str(datetime.date.today())
+    current_date = str(datetime.date.today())
     with open("data.csv", "r", encoding="utf-8") as fdata:
         reader = csv.DictReader(fdata, delimiter=";", quotechar='"')
         data = [row for row in reader]
-    data += [{"date": current_date, "cost": cost, "currency": currency, "product": product, "category": category, "buyer": buyer}]
+    data += [{"date": current_date, "cost": cost, "currency": currency, "product": product, "category": category,
+              "buyer": buyer}]
     with open("data.csv", "w", encoding="utf-8") as fdata:
-        writer = csv.DictWriter(fdata, fieldnames=["date", "cost", "currency", "product", "category", "buyer"], delimiter=";", quotechar='"')
+        writer = csv.DictWriter(fdata, fieldnames=["date", "cost", "currency", "product", "category", "buyer"],
+                                delimiter=";", quotechar='"')
         writer.writeheader()
         for row in data:
             writer.writerow(row)
@@ -60,12 +61,17 @@ def c_help(message):
 
 @bot.message_handler(commands=['message'])
 def c_message(message):
-    bot.send_message(message.chat.id, text='Правильная запись сообщения: “<стоимость покупки> <валюта> <наименование покупки> <категория, к которой отнести покупку>” без ковычек, в <> скобки ввести соответстенный параметр. Необязательные параметры: валюта, категория. Если они не указаны, то вместо них вводятся те, что по умолчанию. Их можно изменить функциями /set_currency и /set_category.')
+    bot.send_message(message.chat.id,
+                     text='Правильная запись сообщения: “<стоимость покупки> <валюта> <наименование покупки> '
+                          '<категория, к которой отнести покупку>” без ковычек, в <> скобки ввести соответстенный '
+                          'параметр. Необязательные параметры: валюта, категория. Если они не указаны, то вместо них '
+                          'вводятся те, что по умолчанию. Их можно изменить функциями /set_currency и /set_category.')
 
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    answer = bot.send_message(message.chat.id, text='Добро пожаловать в Телеграмг-бота "кошельковая мышь". Введите имя.')
+    answer = bot.send_message(message.chat.id,
+                              text='Добро пожаловать в Телеграмг-бота "кошельковая мышь". Введите имя.')
     bot.register_next_step_handler(answer, fchange_name)
 
 
@@ -104,38 +110,115 @@ def wrong_input(message):
     c_message(message)
 
 
+def get_date(st):
+    return [int(i) for i in st.split("-")]
+
+
 @bot.message_handler(commands=['get_info'])
 def get_info(message):
-    answer = bot.send_message(message.chat.id, text='Введите имя, о ком информацию вы хотите узнать.')
-    bot.register_next_step_handler(answer, fget_info)
-
-
-def fget_info(message):
     buyer_chat_id = message.chat.id
-    buyer = message.text
-    days = 1
+    buyer = get_base(str(buyer_chat_id))[-1]
+    days = 30
+    category = "general"
+
+    fget_info(message, buyer, days, category)
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn1 = telebot.types.KeyboardButton("more info")
+    markup.add(btn1)
+    answer = bot.send_message(buyer_chat_id,
+                              text='Если хотите получить специфичную информацию, выберите "more info".',
+                              reply_markup=markup)
+
+    bot.register_next_step_handler(answer, get_more_info)
+
+
+def fget_info(message, buyer, days, category):
+    buyer_chat_id = message.chat.id
+    list_days = [str(datetime.date.today() - datetime.timedelta(days=i)) for i in range(days)]
 
     df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
     df = df[df["buyer"] == buyer]
+    if df.shape[0] == 0:
+        bot.send_message(buyer_chat_id, text="Нет информации о Вас.")
+        return
+
+    if category != "general":
+        df = df[df["category"].isin(category)]
+
+    my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
+                           "buyer": df["buyer"][0]} for i in list_days])
+    df = df[df["date"].isin(list_days)]
+
+    fin = []
+    for i in my_df.values:
+        if list(i)[0] in list(df["date"]):
+            for j in df[df["date"] == list(i)[0]].values:
+                fin.append(j)
+        else:
+            fin.append(i)
+    df = pd.DataFrame(fin, columns=["date", "cost", "currency", "product", "category", "buyer"])
 
     imin = df["cost"].astype("int64").idxmin()
     imax = df["cost"].astype("int64").idxmax()
     summ = df["cost"].astype("int64").sum()
     mean = round(df["cost"].astype("float64").mean(), 2)
 
-    text = f"Информация за {days} дней:\n\n" \
+    text = f"Информация за последние {days} дней в категории '{category}':\n\n" \
            f"Самая дешёвая покупка: {df.iloc[imin]['cost']} {df.iloc[imin]['currency']} {df.iloc[imin]['product']}\n" \
            f"Самая дорогая покупка: {df.iloc[imax]['cost']} {df.iloc[imax]['currency']} {df.iloc[imax]['product']}\n" \
            f"Суммарная стоимость покупки: {summ} руб\n" \
            f"Средняя стоимость покупки: {mean} руб"
-    
+
     plt.figure()
-    df[['date','cost']].set_index('date').plot(figsize=(8, 9))
+    df = df.groupby(by="date")["cost"].sum().reset_index()
+    df[['date', 'cost']].set_index('date').plot(figsize=(8, 9))
     plt.xticks(rotation=45)
     fig = plt.gcf()
     send_pic(buyer_chat_id, fig)
 
     bot.send_message(buyer_chat_id, text=text)
+
+
+def get_more_info(message):
+    text_message = message.text
+
+    if text_message != "more info":
+        func(message)
+        return
+
+    answer = bot.send_message(message.chat.id, text="Введите имя пользователя, о ком Вы хотите узнать информацию.")
+    bot.register_next_step_handler(answer, get_name)
+
+
+def get_name(message):
+    buyer = message.text
+
+    answer = bot.send_message(message.chat.id, text="Введите за сколько дней вы хотите получить информацию.")
+    bot.register_next_step_handler(answer, get_days, buyer)
+
+
+def get_days(message, buyer):
+    days = int(message.text)
+
+    answer = bot.send_message(message.chat.id, text="Введите категорию, по которой вы хотите получить информацию.")
+    bot.register_next_step_handler(answer, get_category, buyer, days)
+
+
+def get_category(message, buyer, days):
+    category = message.text
+
+    fget_info(message, buyer, days, category)
+
+
+class GetDataFromUser:
+
+    def __init__(self, message):
+        self.message = message
+
+        self.buyer = ""
+        self.days = 0
+        self.category = "general"
 
 
 def send_pic(messid, fig):
