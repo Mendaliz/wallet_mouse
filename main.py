@@ -121,13 +121,14 @@ def get_info(message):
     days = 30
     category = "general"
 
-    fget_info(message, buyer, days, category)
+    if fget_info(message, buyer, days, category) is None:
+        return
 
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = telebot.types.KeyboardButton("more info")
+    btn1 = telebot.types.KeyboardButton("more_info")
     markup.add(btn1)
     answer = bot.send_message(buyer_chat_id,
-                              text='Если хотите получить специфичную информацию, выберите "/more_info".',
+                              text='Если хотите получить специфичную информацию, введите "more_info".',
                               reply_markup=markup)
 
     bot.register_next_step_handler(answer, get_more_info)
@@ -146,9 +147,11 @@ def fget_info(message, buyer, days, category):
     if category != "general":
         df = df[df["category"].isin(category.split(", "))]
 
-    my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
-                           "buyer": df["buyer"][0]} for i in list_days])
     df = df[df["date"].isin(list_days)]
+
+    if df.shape[0] == 0:
+        bot.send_message(buyer_chat_id, text="За последний месяц у вас не было трат.")
+        return
 
     imin = df["cost"].astype("int64").idxmin()
     imax = df["cost"].astype("int64").idxmax()
@@ -172,6 +175,8 @@ def fget_info(message, buyer, days, category):
                f"Суммарная стоимость покупок: {summ} руб\n" \
                f"Средняя стоимость покупки: {mean} руб"
 
+    my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
+                           "buyer": df["buyer"][0]} for i in list_days])
     fin = []
     for i in my_df.values:
         if list(i)[0] in list(df["date"]):
@@ -189,13 +194,13 @@ def fget_info(message, buyer, days, category):
     send_pic(buyer_chat_id, fig)
 
     bot.send_message(buyer_chat_id, text=text)
+    return True
 
 
-@bot.message_handler(commands=['more_info'])
 def get_more_info(message):
     text_message = message.text
 
-    if text_message != "/more_info":
+    if text_message != "more_info":
         func(message)
         return
 
@@ -227,42 +232,69 @@ def get_category(message, buyer, days):
 
 def check_alerts():
     with open("alerts.csv", "r", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
+        reader = csv.DictReader(csvfile, delimiter=";")
         data = list(reader)
     fin = []
     for i in data:
-        if datetime.datetime.strptime(i["date_finish"], "%Y-%m-%d") >= datetime.date.today():
+        if datetime.datetime.strptime(i["date_finish"], "%Y-%m-%d") >= datetime.datetime.now():
             fin.append(i)
     with open("alerts.csv", "w", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=list(data[0].keys()))
+        writer = csv.DictWriter(csvfile, fieldnames=list(data[0].keys()), delimiter=";")
         writer.writeheader()
         writer.writerows(fin)
 
 
 @bot.message_handler(commands=["alerts"])
 def alerts(message):
+    check_alerts()
+
     df = pd.read_csv("alerts.csv", delimiter=";", quotechar='"')
     bot.send_message(message.chat.id, text="У Вас зарегестрированы следущие оповещения:")
 
-    df = list(df[df["buyer"] == get_base(str(message.chat.id))[-1]])
-    check_alerts()
+    df = df[df["buyer"] == get_base(str(message.chat.id))[-1]]
 
     for i in range(len(df)):
-        print(f"{i}. Ограничение на {df[i]['max_value']} {df[i]['currency']} "
-              f"в категории {df[i]['category']} до {df[i]['date_finish']}")
+        bot.send_message(message.chat.id, f"{i + 1}. Ограничение на {df.iloc[i]['max_value']} {df.iloc[i]['currency']} "
+                                          f"в категории '{df.iloc[i]['category']}' до {df.iloc[i]['date_finish']}")
 
-    "1. Ограничение на 1000 руб в категории еда до 2024-04-03"
+    answer = bot.send_message(message.chat.id, text='Если хотите получить специфичную информацию об оповещении, '
+                                                    'введите его номер.')
+
+    bot.register_next_step_handler(answer, get_more_alert_info)
+
+
+"1. Ограничение на 800 руб в категории 'еда' до 2024-03-22"
+"""
+date_start;date_finish;max_value;currency;category;buyer
+2024-03-20;2024-03-22;800;руб;еда;Дима
+"""
+
+
+def get_more_alert_info(message):
+
+    if len(message.text.split()) != 1:
+        func(message)
+        return
+    indx = int(message.text)
+
+    df = pd.read_csv("alerts.csv", delimiter=";")
+    alert = df.iloc[indx]
+    days = (datetime.datetime.strptime(alert["date_finish"], "%Y-%m-%d") -
+            datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d")).days
+    fget_info(message, alert["buyer"], days, alert["category"])
+    # с параметром, который создаёт полоску красного цвета в максимуме на графике, возрастающем как суммарное.
 
 
 @bot.message_handler(commands=['make_alert'])
 def make_alert(message):
-    answer = bot.send_message(message.chat.id, text="В какой категории вы хотите сделать оповещение?")
+    answer = bot.send_message(message.chat.id, text="В какой категории вы хотите сделать оповещение? "
+                                                    "(запишите через запятую и пробел)")
 
     bot.register_next_step_handler(answer, get_alert_category)
 
 
 def get_alert_category(message):
-    category = message.text.split(", ")
+    category = message.text
 
     answer = bot.send_message(message.chat.id, text="В какое количество денег вы хотите сделать оповещение?")
     bot.register_next_step_handler(answer, get_alert_cost, category)
@@ -287,17 +319,18 @@ def get_alert_date(message, category, cost, currency):
     date_finish = message.text
 
     with open("alerts.csv", "r", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
+        reader = csv.DictReader(csvfile, delimiter=";")
         data = list(reader)
-        print(data)
     data.append({"date_start": datetime.datetime.now().date(), "date_finish": date_finish, "max_value": cost,
                  "currency": currency, "category": category, "buyer": get_base(str(message.chat.id))[-1]})
     with open("alerts.csv", "w", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile,
-                                fieldnames=["date_start", "date_finish", "max_value", "currency", "category", "buyer"])
+                                fieldnames=["date_start", "date_finish", "max_value", "currency", "category", "buyer"],
+                                delimiter=";")
         writer.writeheader()
         for i in data:
             writer.writerow(i)
+    bot.send_message(message.chat.id, text="Оповещение добавлено.")
 
 
 def send_pic(messid, fig):
