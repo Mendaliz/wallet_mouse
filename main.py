@@ -134,7 +134,7 @@ def get_info(message):
     bot.register_next_step_handler(answer, get_more_info)
 
 
-def fget_info(message, buyer, days, category):
+def fget_info(message, buyer, days, category, max_value=0):
     buyer_chat_id = message.chat.id
     list_days = [str(datetime.date.today() - datetime.timedelta(days=i)) for i in range(days)]
 
@@ -150,7 +150,7 @@ def fget_info(message, buyer, days, category):
     df = df[df["date"].isin(list_days)]
 
     if df.shape[0] == 0:
-        bot.send_message(buyer_chat_id, text="За последний месяц у вас не было трат.")
+        bot.send_message(buyer_chat_id, text=f"За последние {days} дней у вас не было трат.")
         return
 
     imin = df["cost"].astype("int64").idxmin()
@@ -174,6 +174,9 @@ def fget_info(message, buyer, days, category):
                f"{df.iloc[imax]['product']} категории: {df.iloc[imin]['category']}\n" \
                f"Суммарная стоимость покупок: {summ} руб\n" \
                f"Средняя стоимость покупки: {mean} руб"
+    if max_value:
+        text = f"Информация с {datetime.date.today() - datetime.timedelta(days=days)} в категории '{category}':\n" \
+               + "\n".join(text.split("\n")[1:])
 
     my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
                            "buyer": df["buyer"][0]} for i in list_days])
@@ -186,10 +189,15 @@ def fget_info(message, buyer, days, category):
             fin.append(i)
     df = pd.DataFrame(fin, columns=["date", "cost", "currency", "product", "category", "buyer"])
 
-    plt.figure()
+    plt.figure(figsize=(8, 9))
     df = df.groupby(by="date")["cost"].sum().reset_index()
-    df[['date', 'cost']].set_index('date').plot(figsize=(8, 9))
-    plt.xticks(rotation=45)
+    # df[['date', 'cost']].set_index('date').plot(figsize=(8, 9))
+    if max_value:
+        df['cost'] = df['cost'].cumsum()
+
+        plt.plot([max_value] * (df.shape[0]), color="red")
+    plt.plot(df['date'], df['cost'])
+    plt.xticks(rotation=90)
     fig = plt.gcf()
     send_pic(buyer_chat_id, fig)
 
@@ -263,8 +271,8 @@ def alerts(message):
     bot.register_next_step_handler(answer, get_more_alert_info)
 
 
-"1. Ограничение на 800 руб в категории 'еда' до 2024-03-22"
-"""
+"""1. Ограничение на 800 руб в категории 'еда' до 2024-03-22
+
 date_start;date_finish;max_value;currency;category;buyer
 2024-03-20;2024-03-22;800;руб;еда;Дима
 """
@@ -272,17 +280,16 @@ date_start;date_finish;max_value;currency;category;buyer
 
 def get_more_alert_info(message):
 
-    if len(message.text.split()) != 1:
+    if message.text.isdigit() is False:
         func(message)
         return
     indx = int(message.text)
 
     df = pd.read_csv("alerts.csv", delimiter=";")
-    alert = df.iloc[indx]
-    days = (datetime.datetime.strptime(alert["date_finish"], "%Y-%m-%d") -
-            datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d")).days
-    fget_info(message, alert["buyer"], days, alert["category"])
-    # с параметром, который создаёт полоску красного цвета в максимуме на графике, возрастающем как суммарное.
+    alert = df.iloc[indx - 1]
+    days = (datetime.date.today() -
+            datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d").date()).days
+    fget_info(message, alert["buyer"], days, alert["category"], max_value=int(alert['max_value']))
 
 
 @bot.message_handler(commands=['make_alert'])
@@ -344,18 +351,24 @@ def send_pic(messid, fig):
 
 @bot.message_handler(content_types=['text'])
 def func(message):
-    if message.text == "help":
+    if message.text in "/help":
         c_help(message)
-    elif message.text == "message":
+    elif message.text in "/message":
         c_message(message)
-    elif message.text == "start":
+    elif message.text in "/start":
         start(message)
-    elif message.text == "set_currency":
+    elif message.text in "/set_currency":
         set_currency(message)
-    elif message.text == "set_category":
+    elif message.text in "/set_category":
         set_category(message)
-    elif message.text == "change_name":
+    elif message.text in "/change_name":
         change_name(message)
+    elif message.text in "/get_info":
+        get_info(message)
+    elif message.text in "/alerts":
+        alerts(message)
+    elif message.text in "/make_alert":
+        make_alert(message)
     else:
         st = message.text.split()
         bases = get_base(str(message.chat.id))
