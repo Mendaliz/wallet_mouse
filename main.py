@@ -34,16 +34,16 @@ def set_base(st_id, param):
     if st_id in data:
         if param[0] == "currency":
             data[st_id][0] = param[1]
-            bot.send_message(st_id, text=f'Вы установили валюту "{param[1]}"')
+            bot.send_message(st_id, text=f'Вы установили валюту "{param[1]}".')
         if param[0] == "category":
             data[st_id][1] = param[1]
-            bot.send_message(st_id, text=f'Вы установили категорию "{param[1]}"')
+            bot.send_message(st_id, text=f'Вы установили категорию "{param[1]}".')
         if param[0] == "buyer":
             data[st_id][2] = param[1]
-            bot.send_message(st_id, text=f'Вы установили имя "{param[1]}"')
+            bot.send_message(st_id, text=f'Вы установили имя "{param[1]}".')
     else:
         data[st_id] = ["руб", "общий", param[1]]
-        bot.send_message(st_id, text=f'Вы установили имя "{param[1]}"')
+        bot.send_message(st_id, text=f'Вы установили имя "{param[1]}".')
     with open("base.json", "w", encoding="utf-8") as fbase:
         json.dump(data, fbase, ensure_ascii=False, indent=2)
 
@@ -102,6 +102,12 @@ def change_name(message):
 
 
 def fchange_name(message):
+    with open("base.json") as jsonf:
+        data = json.load(jsonf)
+    if filter(lambda x: data[x][-1] == message.text, data):
+        answer = bot.send_message(message.chat.id, text='Такое имя сейчас используется другим пользоавтелем. '
+                                                        'Попробуйте ещё раз')
+        bot.register_next_step_handler(answer, fchange_name)
     set_base(str(message.chat.id), ["buyer", message.text])
 
 
@@ -141,11 +147,18 @@ def fget_info(message, buyer, days, category, max_value=0):
     df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
     df = df[df["buyer"].isin(buyer.split(", "))]
     if df.shape[0] == 0:
-        bot.send_message(buyer_chat_id, text="Нет информации о Вас.")
+        bot.send_message(buyer_chat_id,
+                         text=f"Нет информации о {'пользователе' if len(buyer.split(', ')) == 1 else 'пользователях'}.")
         return
 
     if category != "general":
         df = df[df["category"].isin(category.split(", "))]
+
+    if df.shape[0] == 0:
+        bot.send_message(buyer_chat_id,
+                         text=f"В {'данной категории' if len(category.split(', ')) == 1 else 'данных категориях'} "
+                              f"не было трат.")
+        return
 
     df = df[df["date"].isin(list_days)]
 
@@ -175,7 +188,8 @@ def fget_info(message, buyer, days, category, max_value=0):
                f"Суммарная стоимость покупок: {summ} руб\n" \
                f"Средняя стоимость покупки: {mean} руб"
     if max_value:
-        text = f"Информация с {datetime.date.today() - datetime.timedelta(days=days)} в категории '{category}':\n" \
+        text = f"Информация с {datetime.date.today() - datetime.timedelta(days=days)} в " \
+               f"{'категории' if len(category.split(', ')) == 1 else 'категориях'} '{category}':\n" \
                + "\n".join(text.split("\n")[1:])
 
     my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
@@ -205,10 +219,11 @@ def fget_info(message, buyer, days, category, max_value=0):
     return True
 
 
+@bot.message_handler(commands=['get_more_info'])
 def get_more_info(message):
     text_message = message.text
 
-    if text_message != "more_info":
+    if text_message not in "/more_info":
         func(message)
         return
 
@@ -286,9 +301,12 @@ def get_more_alert_info(message):
     indx = int(message.text)
 
     df = pd.read_csv("alerts.csv", delimiter=";")
+    df = df[df["buyer"] == get_base(str(message.chat.id))[-1]]
+    if indx < 0 or indx - 1 > df.shape[0]:
+        answer = bot.send_message(message.chat.id, text='Неверный номер оповещения. Попробуйте ещё раз.')
+        bot.register_next_step_handler(answer, get_more_alert_info)
     alert = df.iloc[indx - 1]
-    days = (datetime.date.today() -
-            datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d").date()).days
+    days = (datetime.date.today() - datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d").date()).days
     fget_info(message, alert["buyer"], days, alert["category"], max_value=int(alert['max_value']))
 
 
@@ -304,6 +322,9 @@ def get_alert_category(message):
     category = message.text
 
     answer = bot.send_message(message.chat.id, text="В какое количество денег вы хотите сделать оповещение?")
+    if answer.text.isdigit() is False:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        bot.register_next_step_handler(message, get_alert_category)
     bot.register_next_step_handler(answer, get_alert_cost, category)
 
 
@@ -319,6 +340,16 @@ def get_alert_currency(message, category, cost):
 
     answer = bot.send_message(message.chat.id, text="До какого числа Вы хотите установить оповещение? \n"
                                                     "Зпаишите в виде: год-месяц-день")
+    if answer.text.split('-') != 3 or all([i.isdigit() for i in answer.text.split('-')]) is False:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        bot.register_next_step_handler(message, get_alert_currency, category, cost)
+
+    try:
+        datetime.datetime.strptime(answer.text, "%Y-%m-%d").date()
+    except Exception:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        bot.register_next_step_handler(message, get_alert_currency, category, cost)
+
     bot.register_next_step_handler(answer, get_alert_date, category, cost, currency)
 
 
@@ -365,6 +396,8 @@ def func(message):
         change_name(message)
     elif message.text in "/get_info":
         get_info(message)
+    elif message.text in "/get_more_info":
+        get_more_info(message)
     elif message.text in "/alerts":
         alerts(message)
     elif message.text in "/make_alert":
