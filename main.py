@@ -13,7 +13,7 @@ import datetime
 bot = telebot.TeleBot(TOKEN)
 
 
-def add_to_json(cost, product, currency, category, buyer):
+def add_to_json(cost, product, currency, category, buyer, message=""):
     current_date = str(datetime.date.today())
     with open("data.csv", "r", encoding="utf-8") as fdata:
         reader = csv.DictReader(fdata, delimiter=";", quotechar='"')
@@ -26,6 +26,7 @@ def add_to_json(cost, product, currency, category, buyer):
         writer.writeheader()
         for row in data:
             writer.writerow(row)
+    check_alerts(message, buyer, category)
 
 
 def set_base(st_id, param):
@@ -104,10 +105,11 @@ def change_name(message):
 def fchange_name(message):
     with open("base.json") as jsonf:
         data = json.load(jsonf)
-    if filter(lambda x: data[x][-1] == message.text, data):
+    if len(list(filter(lambda x: data[x][-1] == message.text and x != str(message.chat.id), data))):
         answer = bot.send_message(message.chat.id, text='Такое имя сейчас используется другим пользоавтелем. '
                                                         'Попробуйте ещё раз')
         bot.register_next_step_handler(answer, fchange_name)
+        return
     set_base(str(message.chat.id), ["buyer", message.text])
 
 
@@ -173,18 +175,18 @@ def fget_info(message, buyer, days, category, max_value=0):
 
     if len(category.split(", ")) == 1:
         text = f"Информация за последние {days} дней в категории '{category}':\n\n" \
-               f"Самая дешёвая покупка: {df.iloc[imin]['cost']} {df.iloc[imin]['currency']} " \
-               f"{df.iloc[imin]['product']}\n" \
-               f"Самая дорогая покупка: {df.iloc[imax]['cost']} {df.iloc[imax]['currency']} " \
-               f"{df.iloc[imax]['product']}\n" \
+               f"Самая дешёвая покупка: {df.loc[imin]['cost']} {df.loc[imin]['currency']} " \
+               f"{df.loc[imin]['product']}\n" \
+               f"Самая дорогая покупка: {df.loc[imax]['cost']} {df.loc[imax]['currency']} " \
+               f"{df.loc[imax]['product']}\n" \
                f"Суммарная стоимость покупок: {summ} руб\n" \
                f"Средняя стоимость покупки: {mean} руб"
     else:
         text = f"Информация за последние {days} дней в категориях '{category}':\n\n" \
-               f"Самая дешёвая покупка: {df.iloc[imin]['cost']} {df.iloc[imin]['currency']} " \
-               f"{df.iloc[imin]['product']} категории: {df.iloc[imin]['category']}\n" \
-               f"Самая дорогая покупка: {df.iloc[imax]['cost']} {df.iloc[imax]['currency']} " \
-               f"{df.iloc[imax]['product']} категории: {df.iloc[imin]['category']}\n" \
+               f"Самая дешёвая покупка: {df.loc[imin]['cost']} {df.loc[imin]['currency']} " \
+               f"{df.loc[imin]['product']} категории: {df.loc[imin]['category']}\n" \
+               f"Самая дорогая покупка: {df.loc[imax]['cost']} {df.loc[imax]['currency']} " \
+               f"{df.loc[imax]['product']} категории: {df.loc[imin]['category']}\n" \
                f"Суммарная стоимость покупок: {summ} руб\n" \
                f"Средняя стоимость покупки: {mean} руб"
     if max_value:
@@ -192,8 +194,8 @@ def fget_info(message, buyer, days, category, max_value=0):
                f"{'категории' if len(category.split(', ')) == 1 else 'категориях'} '{category}':\n" \
                + "\n".join(text.split("\n")[1:])
 
-    my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"][0], "product": None, "category": None,
-                           "buyer": df["buyer"][0]} for i in list_days])
+    my_df = pd.DataFrame([{"date": i, "cost": 0, "currency": df["currency"].iloc[0], "product": None, "category": None,
+                           "buyer": df["buyer"].iloc[0]} for i in list_days])
     fin = []
     for i in my_df.values:
         if list(i)[0] in list(df["date"]):
@@ -253,7 +255,7 @@ def get_category(message, buyer, days):
     fget_info(message, buyer, days, category)
 
 
-def check_alerts():
+def check_alerts_time():
     with open("alerts.csv", "r", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile, delimiter=";")
         data = list(reader)
@@ -267,9 +269,30 @@ def check_alerts():
         writer.writerows(fin)
 
 
+def check_alerts(message, buyer, category):
+    df = pd.read_csv("alerts.csv", delimiter=";", quotechar='"')
+    df = df[(df["buyer"] == buyer)]
+    for i in range(df.shape[0]):
+        alert = df.iloc[i]
+        if alert["category"] != category:
+            continue
+        data = pd.read_csv("data.csv", delimiter=";", quotechar='"')
+        data = data[data["date"] >= alert["date_start"]]
+        if alert["max_value"] < data[(data["buyer"] == buyer) & (data["category"] == category)]['cost'].sum():
+            bot.send_message(message.chat.id, text=f"ВНИМАНИЕ!!!\n"
+                                                   f"У Вас превышен лимит трат в категории {category}\n"
+                                                   f"Ограничение на {alert['max_value']} {alert['currency']}.")
+            get_more_alert_info(message, ind=i)
+        elif alert["max_value"] * 0.8 <= data[(data["buyer"] == buyer) & (data["category"] == category)]['cost'].sum():
+            bot.send_message(message.chat.id, text=f"ВНИМАНИЕ!!!\n"
+                                                   f"У Вас ПОЧТИ превышен лимит трат в категории {category}\n"
+                                                   f"Ограничение на {alert['max_value']} {alert['currency']}.")
+            get_more_alert_info(message, ind=i)
+
+
 @bot.message_handler(commands=["alerts"])
 def alerts(message):
-    check_alerts()
+    check_alerts_time()
 
     df = pd.read_csv("alerts.csv", delimiter=";", quotechar='"')
     bot.send_message(message.chat.id, text="У Вас зарегестрированы следущие оповещения:")
@@ -293,19 +316,22 @@ date_start;date_finish;max_value;currency;category;buyer
 """
 
 
-def get_more_alert_info(message):
+def get_more_alert_info(message, ind=-1):
 
-    if message.text.isdigit() is False:
+    if message.text.isdigit() is False and ind == -1:
         func(message)
         return
-    indx = int(message.text)
+    if ind != -1:
+        indx = ind
+    else:
+        indx = int(message.text) - 1
 
     df = pd.read_csv("alerts.csv", delimiter=";")
     df = df[df["buyer"] == get_base(str(message.chat.id))[-1]]
-    if indx < 0 or indx - 1 > df.shape[0]:
+    if indx < 0 or indx > df.shape[0]:
         answer = bot.send_message(message.chat.id, text='Неверный номер оповещения. Попробуйте ещё раз.')
         bot.register_next_step_handler(answer, get_more_alert_info)
-    alert = df.iloc[indx - 1]
+    alert = df.iloc[indx]
     days = (datetime.date.today() - datetime.datetime.strptime(alert["date_start"], "%Y-%m-%d").date()).days
     fget_info(message, alert["buyer"], days, alert["category"], max_value=int(alert['max_value']))
 
@@ -318,43 +344,49 @@ def make_alert(message):
     bot.register_next_step_handler(answer, get_alert_category)
 
 
-def get_alert_category(message):
-    category = message.text
+def get_alert_category(message, categ=""):
+    if categ:
+        category = categ
+    else:
+        category = message.text
 
     answer = bot.send_message(message.chat.id, text="В какое количество денег вы хотите сделать оповещение?")
-    if answer.text.isdigit() is False:
-        bot.send_message(message.chat.id, text='Неправильный ввод.')
-        bot.register_next_step_handler(message, get_alert_category)
     bot.register_next_step_handler(answer, get_alert_cost, category)
 
 
 def get_alert_cost(message, category):
+    if message.text.isdigit() is False:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        get_alert_category(message, categ=category)
     cost = int(message.text)
 
     answer = bot.send_message(message.chat.id, text="В какой валюте стоимость оповещения?")
     bot.register_next_step_handler(answer, get_alert_currency, category, cost)
 
 
-def get_alert_currency(message, category, cost):
-    currency = message.text
+def get_alert_currency(message, category, cost, currencic=""):
+    if currencic:
+        currency = currencic
+    else:
+        currency = message.text
 
     answer = bot.send_message(message.chat.id, text="До какого числа Вы хотите установить оповещение? \n"
                                                     "Зпаишите в виде: год-месяц-день")
-    if answer.text.split('-') != 3 or all([i.isdigit() for i in answer.text.split('-')]) is False:
-        bot.send_message(message.chat.id, text='Неправильный ввод.')
-        bot.register_next_step_handler(message, get_alert_currency, category, cost)
-
-    try:
-        datetime.datetime.strptime(answer.text, "%Y-%m-%d").date()
-    except Exception:
-        bot.send_message(message.chat.id, text='Неправильный ввод.')
-        bot.register_next_step_handler(message, get_alert_currency, category, cost)
 
     bot.register_next_step_handler(answer, get_alert_date, category, cost, currency)
 
 
 def get_alert_date(message, category, cost, currency):
     date_finish = message.text
+    if len(date_finish.split('-')) != 3 or all([i.isdigit() for i in date_finish.split('-')]) is False:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        get_alert_currency(message, category, cost, currencic=currency)
+
+    try:
+        datetime.datetime.strptime(date_finish, "%Y-%m-%d").date()
+    except Exception:
+        bot.send_message(message.chat.id, text='Неправильный ввод.')
+        bot.register_next_step_handler(message, get_alert_currency, category, cost)
 
     with open("alerts.csv", "r", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile, delimiter=";")
@@ -406,13 +438,13 @@ def func(message):
         st = message.text.split()
         bases = get_base(str(message.chat.id))
         if len(st) == 2:
-            add_to_json(st[0], st[1], bases[0], bases[1], bases[2])
+            add_to_json(st[0], st[1], bases[0], bases[1], bases[2], message=message)
             bot.send_message(message.chat.id, text='Информация получена.')
         elif len(st) == 3:
-            add_to_json(st[0], st[2], st[1], bases[1], bases[2])
+            add_to_json(st[0], st[2], st[1], bases[1], bases[2], message=message)
             bot.send_message(message.chat.id, text='Информация получена.')
         elif len(st) == 4:
-            add_to_json(st[0], st[2], st[1], st[3], bases[2])
+            add_to_json(st[0], st[2], st[1], st[3], bases[2], message=message)
             bot.send_message(message.chat.id, text='Информация получена.')
         else:
             wrong_input(message)
