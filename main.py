@@ -14,39 +14,46 @@ bot = telebot.TeleBot(TOKEN)
 
 
 def add_to_json(cost, product, currency, category, buyer, message=""):
+    product = product.lower()
+    currency = currency.lower()
+    category = category.lower()
     current_date = str(datetime.date.today())
     with open("data.csv", "r", encoding="utf-8") as fdata:
         reader = csv.DictReader(fdata, delimiter=";", quotechar='"')
         data = [row for row in reader]
     data += [{"date": current_date, "cost": cost, "currency": currency, "product": product, "category": category,
-              "buyer": buyer}]
+              "buyer": int(buyer)}]
     with open("data.csv", "w", encoding="utf-8") as fdata:
         writer = csv.DictWriter(fdata, fieldnames=["date", "cost", "currency", "product", "category", "buyer"],
                                 delimiter=";", quotechar='"')
         writer.writeheader()
         for row in data:
             writer.writerow(row)
-    check_alerts(message, buyer, category)
+    check_alerts(message, int(buyer), category)
 
 
 def set_base(st_id, param):
     with open("base.json", "r", encoding="utf-8") as fbase:
-        data = json.load(fbase)
-    if st_id in data:
+        base = json.load(fbase)
+    if st_id in base:
         if param[0] == "currency":
-            data[st_id][0] = param[1]
-            bot.send_message(st_id, text=f'Вы установили валюту "{param[1]}".')
+            base[st_id]["chosen_currency"] = param[1]
+            bot.send_message(st_id, text=f'Вы установили валюту "{param[1]}".',
+                             reply_markup=telebot.types.ReplyKeyboardRemove())
         if param[0] == "category":
-            data[st_id][1] = param[1]
-            bot.send_message(st_id, text=f'Вы установили категорию "{param[1]}".')
+            base[st_id]["chosen_category"] = param[1]
+            bot.send_message(st_id, text=f'Вы установили категорию "{param[1]}".',
+                             reply_markup=telebot.types.ReplyKeyboardRemove())
         if param[0] == "buyer":
-            data[st_id][2] = param[1]
-            bot.send_message(st_id, text=f'Вы установили имя "{param[1]}".')
+            base[st_id]["name"] = param[1]
+            bot.send_message(st_id, text=f'Вы установили имя "{param[1]}".',
+                             reply_markup=telebot.types.ReplyKeyboardRemove())
     else:
-        data[st_id] = ["руб", "общий", param[1]]
+        base[st_id] = {"chosen_currency": "руб", "currencies": ["руб"], "chosen_category": "все",
+                       "categories": ["все"], "name": param[1], "ident": str(len(base))}
         bot.send_message(st_id, text=f'Вы установили имя "{param[1]}".')
     with open("base.json", "w", encoding="utf-8") as fbase:
-        json.dump(data, fbase, ensure_ascii=False, indent=2)
+        json.dump(base, fbase, ensure_ascii=False, indent=2)
 
 
 def get_base(st_id):
@@ -76,24 +83,176 @@ def start(message):
     bot.register_next_step_handler(answer, fchange_name)
 
 
+@bot.message_handler(commands=['add_currency'])
+def add_currency(message):
+    answer = bot.send_message(message.chat.id, text='Введите новую валюту.')
+    bot.register_next_step_handler(answer, fadd_currency)
+
+
+def fadd_currency(message):
+    with open("base.json", "r", encoding="utf-8") as fbase:
+        base = json.load(fbase)
+    base[str(message.chat.id)]["currencies"] += [message.text.lower()]
+    with open("base.json", "w", encoding="utf-8") as fbase:
+        json.dump(base, fbase, ensure_ascii=False, indent=2)
+    bot.send_message(message.chat.id, text=f'Валюта "{message.text.lower()}" сохранена.')
+
+
+@bot.message_handler(commands=['del_currency'])
+def del_currency(message):
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for curr in get_base(str(message.chat.id))["currencies"]:
+        btn = telebot.types.KeyboardButton(curr)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите валюту, которую хотите удалить.',
+                              reply_markup=markup)
+
+    bot.register_next_step_handler(answer, fget_to_change_curr)
+
+
+def fget_to_change_curr(message):
+    if message.text.lower() not in get_base(str(message.chat.id))["currencies"]:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        del_currency(message)
+        return
+    to_del = message.text.lower()
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for curr in get_base(str(message.chat.id))["currencies"]:
+        btn = telebot.types.KeyboardButton(curr)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите валюту, на которую хотите заменить эту валютув в сохраненных данных.',
+                              reply_markup=markup)
+
+    bot.register_next_step_handler(answer, fdel_currency, to_del)
+
+
+def fdel_currency(message, to_del):
+    if message.text.lower() not in get_base(str(message.chat.id))["currencies"] or message.text == to_del:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        del_currency(message)
+        return
+    with open("base.json", "r", encoding="utf-8") as fbase:
+        base = json.load(fbase)
+    base[str(message.chat.id)]["currencies"].remove(to_del)
+    with open("base.json", "w", encoding="utf-8") as fbase:
+        json.dump(base, fbase, ensure_ascii=False, indent=2)
+    bot.send_message(message.chat.id, text=f'Валюта "{to_del}" удалена.',
+                     reply_markup=telebot.types.ReplyKeyboardRemove())
+
+    df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
+    if df[df["currency"] == to_del].shape[0] == 0:
+        return
+    df.loc[df["currency"] == to_del, "currency"] = message.text.lower()
+    df.to_csv('data.csv', index=False)
+
+
 @bot.message_handler(commands=['set_currency'])
 def set_currency(message):
-    answer = bot.send_message(message.chat.id, text='Введите новый тип валюты по умолчанию.')
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for curr in get_base(str(message.chat.id))["currencies"]:
+        btn = telebot.types.KeyboardButton(curr)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите новую валюту по умолчанию.',
+                              reply_markup=markup)
+
     bot.register_next_step_handler(answer, fset_currency)
 
 
 def fset_currency(message):
-    set_base(str(message.chat.id), ["currency", message.text])
+    if message.text.lower() not in get_base(str(message.chat.id))["currencies"]:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        set_currency(message)
+        return
+    set_base(str(message.chat.id), ["currency", message.text.lower()])
+
+
+@bot.message_handler(commands=['add_category'])
+def add_category(message):
+    answer = bot.send_message(message.chat.id, text='Введите новую категорию.')
+    bot.register_next_step_handler(answer, fadd_category)
+
+
+def fadd_category(message):
+    with open("base.json", "r", encoding="utf-8") as fbase:
+        base = json.load(fbase)
+    base[str(message.chat.id)]["categories"] += [message.text.lower()]
+    with open("base.json", "w", encoding="utf-8") as fbase:
+        json.dump(base, fbase, ensure_ascii=False, indent=2)
+    bot.send_message(message.chat.id, text=f'Категория "{message.text.lower()}" сохранена.')
+
+
+@bot.message_handler(commands=['del_category'])
+def del_category(message):
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for cat in get_base(str(message.chat.id))["categories"]:
+        btn = telebot.types.KeyboardButton(cat)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите категорию, которую хотите удалить.',
+                              reply_markup=markup)
+
+    bot.register_next_step_handler(answer, fget_to_change_cat)
+
+
+def fget_to_change_cat(message):
+    if message.text.lower() not in get_base(str(message.chat.id))["categories"]:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        del_category(message)
+        return
+    to_del = message.text.lower()
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for curr in get_base(str(message.chat.id))["categories"]:
+        btn = telebot.types.KeyboardButton(curr)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите категорию, на которую хотите заменить эту категрию в сохраненных данных.',
+                              reply_markup=markup)
+
+    bot.register_next_step_handler(answer, fdel_category, to_del)
+
+
+def fdel_category(message, to_del):
+    if message.text.lower() not in get_base(str(message.chat.id))["categories"] or message.text == to_del:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        del_category(message)
+        return
+    with open("base.json", "r", encoding="utf-8") as fbase:
+        base = json.load(fbase)
+    base[str(message.chat.id)]["categories"].remove(to_del)
+    with open("base.json", "w", encoding="utf-8") as fbase:
+        json.dump(base, fbase, ensure_ascii=False, indent=2)
+    bot.send_message(message.chat.id, text=f'Категория "{to_del}" удалена.',
+                     reply_markup=telebot.types.ReplyKeyboardRemove())
+
+    df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
+    if df[df["category"] == to_del].shape[0] == 0:
+        return
+    df.loc[df["category"] == to_del, "category"] = message.text.lower()
+    df.to_csv('data.csv', index=False)
 
 
 @bot.message_handler(commands=['set_category'])
 def set_category(message):
-    answer = bot.send_message(message.chat.id, text='Введите новую категорию по умолчанию.')
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for cat in get_base(str(message.chat.id))["categories"]:
+        btn = telebot.types.KeyboardButton(cat)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите новую категорию по умолчанию.',
+                              reply_markup=markup)
+
     bot.register_next_step_handler(answer, fset_category)
 
 
 def fset_category(message):
-    set_base(str(message.chat.id), ["category", message.text])
+    if message.text.lower() not in get_base(str(message.chat.id))["categories"]:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        set_category(message)
+        return
+    set_base(str(message.chat.id), ["category", message.text.lower()])
 
 
 @bot.message_handler(commands=['change_name'])
@@ -103,14 +262,8 @@ def change_name(message):
 
 
 def fchange_name(message):
-    with open("base.json") as jsonf:
-        data = json.load(jsonf)
-    if len(list(filter(lambda x: data[x][-1] == message.text and x != str(message.chat.id), data))):
-        answer = bot.send_message(message.chat.id, text='Такое имя сейчас используется другим пользоавтелем. '
-                                                        'Попробуйте ещё раз')
-        bot.register_next_step_handler(answer, fchange_name)
-        return
-    set_base(str(message.chat.id), ["buyer", message.text])
+    set_base(str(message.chat.id), ["buyer", message.text.lower()])
+    bot.send_message(message.chat.id, text="Имя установлено.")
 
 
 def wrong_input(message):
@@ -118,21 +271,17 @@ def wrong_input(message):
     c_message(message)
 
 
-def get_date(st):
-    return [int(i) for i in st.split("-")]
-
-
 @bot.message_handler(commands=['get_info'])
 def get_info(message):
     buyer_chat_id = message.chat.id
-    buyer = get_base(str(buyer_chat_id))[-1]
+    buyer = int(get_base(str(buyer_chat_id))["ident"])
     days = 30
-    category = "general"
+    category = "все"
 
     if fget_info(message, buyer, days, category) is None:
         return
 
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     btn1 = telebot.types.KeyboardButton("more_info")
     markup.add(btn1)
     answer = bot.send_message(buyer_chat_id,
@@ -147,13 +296,13 @@ def fget_info(message, buyer, days, category, max_value=0):
     list_days = [str(datetime.date.today() - datetime.timedelta(days=i)) for i in range(days)]
 
     df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
-    df = df[df["buyer"].isin(buyer.split(", "))]
+    df = df[df["buyer"] == buyer]
     if df.shape[0] == 0:
         bot.send_message(buyer_chat_id,
-                         text=f"Нет информации о {'пользователе' if len(buyer.split(', ')) == 1 else 'пользователях'}.")
+                         text=f"Нет информации о пользователе.")
         return
 
-    if category != "general":
+    if category != "все":
         df = df[df["category"].isin(category.split(", "))]
 
     if df.shape[0] == 0:
@@ -223,19 +372,13 @@ def fget_info(message, buyer, days, category, max_value=0):
 
 @bot.message_handler(commands=['get_more_info'])
 def get_more_info(message):
-    text_message = message.text
+    text_message = message.text.lower()
 
     if text_message not in "/more_info":
         func(message)
         return
 
-    answer = bot.send_message(message.chat.id, text="Введите имя(-ена) пользователя(-ей), о ком "
-                                                    "Вы хотите узнать информацию (через запятую и пробел).")
-    bot.register_next_step_handler(answer, get_name)
-
-
-def get_name(message):
-    buyer = message.text
+    buyer = int(get_base(str(message.chat.id))["ident"])
 
     answer = bot.send_message(message.chat.id, text="Введите за сколько дней вы хотите получить информацию.")
     bot.register_next_step_handler(answer, get_days, buyer)
@@ -250,7 +393,7 @@ def get_days(message, buyer):
 
 
 def get_category(message, buyer, days):
-    category = message.text
+    category = message.text.lower()
 
     fget_info(message, buyer, days, category)
 
@@ -297,7 +440,7 @@ def alerts(message):
     df = pd.read_csv("alerts.csv", delimiter=";", quotechar='"')
     bot.send_message(message.chat.id, text="У Вас зарегестрированы следущие оповещения:")
 
-    df = df[df["buyer"] == get_base(str(message.chat.id))[-1]]
+    df = df[df["buyer"] == int(get_base(str(message.chat.id))["ident"])]
 
     for i in range(len(df)):
         bot.send_message(message.chat.id, f"{i + 1}. Ограничение на {df.iloc[i]['max_value']} {df.iloc[i]['currency']} "
@@ -312,7 +455,7 @@ def alerts(message):
 """1. Ограничение на 800 руб в категории 'еда' до 2024-03-22
 
 date_start;date_finish;max_value;currency;category;buyer
-2024-03-20;2024-03-22;800;руб;еда;Дима
+2024-03-20;2024-03-22;800;руб;еда;1
 """
 
 
@@ -327,7 +470,7 @@ def get_more_alert_info(message, ind=-1):
         indx = int(message.text) - 1
 
     df = pd.read_csv("alerts.csv", delimiter=";")
-    df = df[df["buyer"] == get_base(str(message.chat.id))[-1]]
+    df = df[df["buyer"] == int(get_base(str(message.chat.id))["ident"])]
     if indx < 0 or indx > df.shape[0]:
         answer = bot.send_message(message.chat.id, text='Неверный номер оповещения. Попробуйте ещё раз.')
         bot.register_next_step_handler(answer, get_more_alert_info)
@@ -348,7 +491,7 @@ def get_alert_category(message, categ=""):
     if categ:
         category = categ
     else:
-        category = message.text
+        category = message.text.lower()
 
     answer = bot.send_message(message.chat.id, text="В какое количество денег вы хотите сделать оповещение?")
     bot.register_next_step_handler(answer, get_alert_cost, category)
@@ -368,7 +511,7 @@ def get_alert_currency(message, category, cost, currencic=""):
     if currencic:
         currency = currencic
     else:
-        currency = message.text
+        currency = message.text.lower()
 
     answer = bot.send_message(message.chat.id, text="До какого числа Вы хотите установить оповещение? \n"
                                                     "Зпаишите в виде: год-месяц-день")
@@ -377,7 +520,7 @@ def get_alert_currency(message, category, cost, currencic=""):
 
 
 def get_alert_date(message, category, cost, currency):
-    date_finish = message.text
+    date_finish = message.text.lower()
     if len(date_finish.split('-')) != 3 or all([i.isdigit() for i in date_finish.split('-')]) is False:
         bot.send_message(message.chat.id, text='Неправильный ввод.')
         get_alert_currency(message, category, cost, currencic=currency)
@@ -392,7 +535,7 @@ def get_alert_date(message, category, cost, currency):
         reader = csv.DictReader(csvfile, delimiter=";")
         data = list(reader)
     data.append({"date_start": datetime.datetime.now().date(), "date_finish": date_finish, "max_value": cost,
-                 "currency": currency, "category": category, "buyer": get_base(str(message.chat.id))[-1]})
+                 "currency": currency, "category": category, "buyer": int(get_base(str(message.chat.id))["ident"])})
     with open("alerts.csv", "w", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile,
                                 fieldnames=["date_start", "date_finish", "max_value", "currency", "category", "buyer"],
@@ -414,38 +557,60 @@ def send_pic(messid, fig):
 
 @bot.message_handler(content_types=['text'])
 def func(message):
-    if message.text in "/help":
+    if message.text.lower() in "/help":
         c_help(message)
-    elif message.text in "/message":
+    elif message.text.lower() in "/message":
         c_message(message)
-    elif message.text in "/start":
+    elif message.text.lower() in "/start":
         start(message)
-    elif message.text in "/set_currency":
+    elif message.text.lower() in "/add_currency":
+        add_currency(message)
+    elif message.text.lower() in "/del_currency":
+        del_currency(message)
+    elif message.text.lower() in "/set_currency":
         set_currency(message)
-    elif message.text in "/set_category":
+    elif message.text.lower() in "/add_category":
+        add_category(message)
+    elif message.text.lower() in "/del_category":
+        del_category(message)
+    elif message.text.lower() in "/set_category":
         set_category(message)
-    elif message.text in "/change_name":
+    elif message.text.lower() in "/change_name":
         change_name(message)
-    elif message.text in "/get_info":
+    elif message.text.lower() in "/get_info":
         get_info(message)
-    elif message.text in "/get_more_info":
+    elif message.text.lower() in "/get_more_info":
         get_more_info(message)
-    elif message.text in "/alerts":
+    elif message.text.lower() in "/alerts":
         alerts(message)
-    elif message.text in "/make_alert":
+    elif message.text.lower() in "/make_alert":
         make_alert(message)
     else:
-        st = message.text.split()
+        st = message.text.lower().split()
         bases = get_base(str(message.chat.id))
         if len(st) == 2:
-            add_to_json(st[0], st[1], bases[0], bases[1], bases[2], message=message)
-            bot.send_message(message.chat.id, text='Информация получена.')
+            add_to_json(st[0], st[1], bases["chosen_currency"], bases["chosen_category"], bases["ident"],
+                        message=message)
+            bot.send_message(message.chat.id, text=" ".join([st[0], st[1], bases["chosen_currency"],
+                                                             bases["chosen_category"]])
+                                                   + '. Информация получена.')
         elif len(st) == 3:
-            add_to_json(st[0], st[2], st[1], bases[1], bases[2], message=message)
-            bot.send_message(message.chat.id, text='Информация получена.')
+            if st[2] not in get_base(str(message.chat.id))["currencies"]:
+                bot.send_message(message.chat.id, text="Такой валюты нет в списке.")
+                return
+            add_to_json(st[0], st[2], st[1], bases["chosen_category"], bases["ident"], message=message)
+            bot.send_message(message.chat.id, text=" ".join([st[0], st[2], st[1], bases["chosen_category"]])
+                                                   + '. Информация получена.')
         elif len(st) == 4:
-            add_to_json(st[0], st[2], st[1], st[3], bases[2], message=message)
-            bot.send_message(message.chat.id, text='Информация получена.')
+            if st[2] not in get_base(str(message.chat.id))["currencies"]:
+                bot.send_message(message.chat.id, text="Такой валюты нет в списке.")
+                return
+            if st[3] not in get_base(str(message.chat.id))["categories"]:
+                bot.send_message(message.chat.id, text="Такой категории нет в списке.")
+                return
+            add_to_json(st[0], st[2], st[1], st[3], bases["ident"], message=message)
+            bot.send_message(message.chat.id, text=" ".join([st[0], st[2], st[1], st[3]])
+                                                   + '. Информация получена.')
         else:
             wrong_input(message)
 
