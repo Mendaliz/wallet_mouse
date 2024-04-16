@@ -64,7 +64,11 @@ def get_base(st_id):
 
 @bot.message_handler(commands=['help'])
 def c_help(message):
-    bot.send_message(message.chat.id, text='Помощь.')
+    bot.send_message(message.chat.id, text='Чтобы получить информацию о способах ввода информации используйте функцию '
+                                           '/message.\n'
+                                           'Чтобы получить информацию о введенных данных используйте функцию '
+                                           '/get_info\n'
+                                           'Чтобы получить информацию об оповещениях используйте функцию /alerts')
 
 
 @bot.message_handler(commands=['message'])
@@ -73,7 +77,22 @@ def c_message(message):
                      text='Правильная запись сообщения: “<стоимость покупки> <валюта> <наименование покупки> '
                           '<категория, к которой отнести покупку>” без ковычек, в <> скобки ввести соответстенный '
                           'параметр. Необязательные параметры: валюта, категория. Если они не указаны, то вместо них '
-                          'вводятся те, что по умолчанию. Их можно изменить функциями /set_currency и /set_category.')
+                          'вводятся те, что по умолчанию. Их можно выбрать из списка функциями '
+                          '/set_currency и /set_category. \n'
+                          'Списки можно посмотреть функцией /lists, '
+                          'изменить функциями /add_currency, /del_currency, /add_category, /del_category.')
+
+
+@bot.message_handler(commands=['lists'])
+def show_lists(message):
+    bot.send_message(message.chat.id, text="Список доступных валют:\n" +
+                                           '\n'.join(get_base(str(message.chat.id))['currencies']) +
+                                           "\n\nВалюта по умолчанию:\n" +
+                                           get_base(str(message.chat.id))["chosen_currency"])
+    bot.send_message(message.chat.id, text="Список доступных категорий:\n" +
+                                           '\n'.join(get_base(str(message.chat.id))['categories']) +
+                                           "\n\nКатегория по умолчанию:\n" +
+                                           get_base(str(message.chat.id))["chosen_category"])
 
 
 @bot.message_handler(commands=['start'])
@@ -263,7 +282,6 @@ def change_name(message):
 
 def fchange_name(message):
     set_base(str(message.chat.id), ["buyer", message.text.lower()])
-    bot.send_message(message.chat.id, text="Имя установлено.")
 
 
 def wrong_input(message):
@@ -366,7 +384,7 @@ def fget_info(message, buyer, days, category, max_value=0):
     fig = plt.gcf()
     send_pic(buyer_chat_id, fig)
 
-    bot.send_message(buyer_chat_id, text=text)
+    bot.send_message(buyer_chat_id, text=text, reply_markup=telebot.types.ReplyKeyboardRemove())
     return True
 
 
@@ -387,13 +405,23 @@ def get_more_info(message):
 def get_days(message, buyer):
     days = int(message.text)
 
-    answer = bot.send_message(message.chat.id, text="Введите категорию(-ии), по которой(-ым) "
-                                                    "Вы хотите получить информацию (через запятую и пробел).")
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for cat in get_base(str(message.chat.id))["categories"]:
+        btn = telebot.types.KeyboardButton(cat)
+        markup.add(btn)
+    answer = bot.send_message(message.chat.id,
+                              text='Выберите категорию, по которой Вы хотите получить информацию.',
+                              reply_markup=markup)
+
     bot.register_next_step_handler(answer, get_category, buyer, days)
 
 
 def get_category(message, buyer, days):
     category = message.text.lower()
+    if message.text.lower() not in get_base(str(message.chat.id))["categories"]:
+        bot.send_message(message.chat.id, text="Неверный ввод, попробуй ещё раз.")
+        get_days(message, buyer)
+        return
 
     fget_info(message, buyer, days, category)
 
@@ -421,12 +449,14 @@ def check_alerts(message, buyer, category):
             continue
         data = pd.read_csv("data.csv", delimiter=";", quotechar='"')
         data = data[data["date"] >= alert["date_start"]]
-        if alert["max_value"] < data[(data["buyer"] == buyer) & (data["category"] == category)]['cost'].sum():
+        if alert["max_value"] < data[(data["buyer"] == buyer) & (data["category"] == category |
+                                                                 category == "все")]['cost'].sum():
             bot.send_message(message.chat.id, text=f"ВНИМАНИЕ!!!\n"
                                                    f"У Вас превышен лимит трат в категории {category}\n"
                                                    f"Ограничение на {alert['max_value']} {alert['currency']}.")
             get_more_alert_info(message, ind=i)
-        elif alert["max_value"] * 0.8 <= data[(data["buyer"] == buyer) & (data["category"] == category)]['cost'].sum():
+        elif alert["max_value"] * 0.8 <= data[(data["buyer"] == buyer) & (data["category"] == category |
+                                                                          category == "все")]['cost'].sum():
             bot.send_message(message.chat.id, text=f"ВНИМАНИЕ!!!\n"
                                                    f"У Вас ПОЧТИ превышен лимит трат в категории {category}\n"
                                                    f"Ограничение на {alert['max_value']} {alert['currency']}.")
@@ -483,7 +513,6 @@ def get_more_alert_info(message, ind=-1):
 def make_alert(message):
     answer = bot.send_message(message.chat.id, text="В какой категории вы хотите сделать оповещение? "
                                                     "(запишите через запятую и пробел)")
-
     bot.register_next_step_handler(answer, get_alert_category)
 
 
@@ -492,7 +521,6 @@ def get_alert_category(message, categ=""):
         category = categ
     else:
         category = message.text.lower()
-
     answer = bot.send_message(message.chat.id, text="В какое количество денег вы хотите сделать оповещение?")
     bot.register_next_step_handler(answer, get_alert_cost, category)
 
@@ -502,7 +530,6 @@ def get_alert_cost(message, category):
         bot.send_message(message.chat.id, text='Неправильный ввод.')
         get_alert_category(message, categ=category)
     cost = int(message.text)
-
     answer = bot.send_message(message.chat.id, text="В какой валюте стоимость оповещения?")
     bot.register_next_step_handler(answer, get_alert_currency, category, cost)
 
@@ -512,10 +539,8 @@ def get_alert_currency(message, category, cost, currencic=""):
         currency = currencic
     else:
         currency = message.text.lower()
-
     answer = bot.send_message(message.chat.id, text="До какого числа Вы хотите установить оповещение? \n"
                                                     "Зпаишите в виде: год-месяц-день")
-
     bot.register_next_step_handler(answer, get_alert_date, category, cost, currency)
 
 
@@ -524,7 +549,6 @@ def get_alert_date(message, category, cost, currency):
     if len(date_finish.split('-')) != 3 or all([i.isdigit() for i in date_finish.split('-')]) is False:
         bot.send_message(message.chat.id, text='Неправильный ввод.')
         get_alert_currency(message, category, cost, currencic=currency)
-
     try:
         datetime.datetime.strptime(date_finish, "%Y-%m-%d").date()
     except Exception:
@@ -561,6 +585,8 @@ def func(message):
         c_help(message)
     elif message.text.lower() in "/message":
         c_message(message)
+    elif message.text.lower() in "/lists":
+        show_lists(message)
     elif message.text.lower() in "/start":
         start(message)
     elif message.text.lower() in "/add_currency":
@@ -591,7 +617,7 @@ def func(message):
         if len(st) == 2:
             add_to_json(st[0], st[1], bases["chosen_currency"], bases["chosen_category"], bases["ident"],
                         message=message)
-            bot.send_message(message.chat.id, text=" ".join([st[0], st[1], bases["chosen_currency"],
+            bot.send_message(message.chat.id, text=" ".join([st[0], bases["chosen_currency"], st[1],
                                                              bases["chosen_category"]])
                                                    + '. Информация получена.')
         elif len(st) == 3:
