@@ -1,8 +1,11 @@
 from config import TOKEN
+# import pip
+# pip.main(['install', 'pytelegrambotapi'])
 import telebot
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
 import io
 import base64
 
@@ -579,6 +582,21 @@ def send_pic(messid, fig):
     bot.send_photo(messid, image_data)
 
 
+@bot.message_handler(content_types=['excel_info'])
+def send_excel(message):
+    df = pd.read_csv("data.csv", delimiter=";", quotechar='"')
+    with open("base.json", "r", encoding="utf-8") as jsonf:
+        base = json.load(jsonf)
+    a = -1
+    for i in base:
+        a += 1
+        df["buyer"] = df["buyer"].replace(a, base[i]["name"])
+    df.to_excel("wallet_mouse_data.xlsx", index=False)
+    with open("wallet_mouse_data.xlsx", "rb") as xlsxf:
+        bot.send_document(message.chat.id, xlsxf)
+    os.remove("wallet_mouse_data.xlsx")
+
+
 @bot.message_handler(content_types=['text'])
 def func(message):
     if message.text.lower() in "/help":
@@ -611,6 +629,8 @@ def func(message):
         alerts(message)
     elif message.text.lower() in "/make_alert":
         make_alert(message)
+    elif message.text.lower() in "/excel_info":
+        send_excel(message)
     else:
         st = message.text.lower().split()
         bases = get_base(str(message.chat.id))
